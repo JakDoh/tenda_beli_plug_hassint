@@ -1,0 +1,11 @@
+{
+  "domain": "tendabeli",
+  "name": "Tenda Beli Provisioning Server",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "documentation": "None",
+  "dependencies": [],
+  "codeowners": ["@jakdoh"],
+  "requirements": [],
+  "version": "0.1.2"
+}

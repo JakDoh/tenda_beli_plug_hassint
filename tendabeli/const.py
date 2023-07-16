@@ -1,0 +1,2 @@
+DOMAIN = "tendabeli"
+HUB = "hub"
