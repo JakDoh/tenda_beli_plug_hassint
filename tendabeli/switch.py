@@ -35,7 +35,7 @@ async def async_setup_platform(
                 _LOGGER.debug(f"Unexpected error during setup, {err=}, {type(err)=}")
                 raise
         elif msg == "discard":
-            await remove_entity(f"tbp_switch_{self._sn}")
+            await remove_entity(f"tbp_switch_{sn}")
             _LOGGER.debug(f"Succesfully removed {sn}")
     
     try:
