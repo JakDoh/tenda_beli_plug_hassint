@@ -40,8 +40,8 @@ async def async_setup_platform(
                 _LOGGER.debug(f"Succesfully added sensor entities for {sn}")
 
             elif msg == "discard":
-                await remove_entity(f"tbp_energy_{self._sn[-4:]}")
-                await remove_entity(f"tbp_power_{self._sn[-4:]}")
+                await remove_entity(f"tbp_energy_{self._sn}")
+                await remove_entity(f"tbp_power_{self._sn}")
                 _LOGGER.debug(f"Succesfully removed {sn}")
 
         except Exception as err:
