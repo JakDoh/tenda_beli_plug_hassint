@@ -151,19 +151,21 @@ class TendaBeliServer:
         _haIP = haIp.split(".")
         if len(_haIP) == 4:
             self._prov_srv_ip = "".join(map(lambda x: format(int(x), "02x"), _haIP))
-            await asyncio.gather(
-            self.start(1821,self.handle_rendezvous_connection),
-            self.start(DEFAULT_PORT,self.handle_provisioning_connection))
+            asyncio.create_task(self.start(1821,self.handle_rendezvous_connection))
+            asyncio.create_task(self.start(DEFAULT_PORT,self.handle_provisioning_connection))
             self._running = True
         else:
              _LOGGER.debug(f"Not valid IP: {haIp}")
+
 
     async def start(self, port, handle):
         server = await asyncio.start_server(handle, "0.0.0.0", port)
         self._servers.append(server)
         addr = server.sockets[0].getsockname()
         _LOGGER.debug(f"Server listening on {addr}:{port}")
-        await server.serve_forever()
+        async with server:
+            await server.serve_forever()
+        
 
     async def stop(self):
         self._running = False
