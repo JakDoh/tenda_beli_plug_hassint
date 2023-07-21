@@ -3,7 +3,7 @@ import logging
 from .tenda import TendaBeliPlug, TendaBeliServer
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.helpers.entity_registry import async_get_registry
+from homeassistant.helpers.entity_registry import async_get
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -19,7 +19,7 @@ async def async_setup_platform(
     discovery_info: DiscoveryInfoType | None = None) -> None:
 
     async def remove_entity(entity_id):
-        entity_registry = await async_get_registry(hass)
+        entity_registry = await async_get(hass)
         entity_entry = entity_registry.async_get(entity_id)
         if entity_entry:
             await entity_registry.async_remove(entity_entry.entity_id)
