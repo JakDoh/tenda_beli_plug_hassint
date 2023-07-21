@@ -163,7 +163,7 @@ class TendaBeliServer:
         self._servers.append(server)
         addr = server.sockets[0].getsockname()
         _LOGGER.debug(f"Server listening on {addr}:{port}")
-        server.serve_forever()
+        await server.serve_forever()
 
     async def stop(self):
         self._running = False
