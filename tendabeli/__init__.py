@@ -40,7 +40,6 @@ class TendaBeli:
         await self.hub.listen(haip)
 
     def stop(self, event):
-        self.tracker.async_remove()
         self.hub.stop()
 
     

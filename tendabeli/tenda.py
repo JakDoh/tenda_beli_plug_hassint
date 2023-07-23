@@ -5,19 +5,20 @@ import time
 _LOGGER = logging.getLogger(__name__)
 # Default timeout 101 sec for keepalive packet, if exceeded then plug is dead and should be removed
 DEFAULT_TIMEOUT = 101
-# Default rendezvous server port. TODO: make port as variable optionally configurable for user
+# Default provisioning server port
 DEFAULT_PORT = 1822
 
 class TendaBeliPlug():
     def __init__(self, address :str , writer, *args,
                  timeout=DEFAULT_TIMEOUT):
         self._availible = False
-         # Connection to rendezvous server
+         # Connection to provisioning server
         self._ip_address = address
         self._writer = writer
         self._timeout = timeout
         self._registration_date: time = time.time()
         self._last_alive = self._registration_date
+        self._op_callbacks = set()
         
         # Plug Identification Data - obtained from first packet
         self._sn = None
@@ -25,9 +26,9 @@ class TendaBeliPlug():
         
         # Plug Operating Data
         self._is_on = False
-        self._power: float =  0
+        self._power: str =  "unknown"
         self._power_last_update: time = None
-        self._energy: float = 0
+        self._energy: str = "unknown"
         self._energy_last_update: time = None
         
     def send_toggle_request(self)-> None:
@@ -39,13 +40,16 @@ class TendaBeliPlug():
     def send_consume_request(self)-> None:
         self._writer.write(bytes.fromhex("2400030000d500000208000000000000"))
 
+    async def update_hass(self)-> None:
+        for callback in self._op_callbacks:
+            await callback()
+
+    def op_callbacks(self, callback, discard: bool = False) -> None:
+        self._op_callbacks.discard(callback) if discard else self._op_callbacks.add(callback)
+
     @property
     def alive(self) -> bool:
-        if (time.time() - self._last_alive) > self._timeout:
-           return False
-        else:
-           return True
-    
+        return False if (time.time() - self._last_alive) > self._timeout else True
     @alive.setter
     def alive(self,value :time):
         self._last_alive = value 
@@ -60,7 +64,7 @@ class TendaBeliPlug():
     @sn.setter
     def sn(self, value: str):
         self._sn = value
-    
+       
     @property
     def nick(self) -> str:
         return self._nick
@@ -74,6 +78,7 @@ class TendaBeliPlug():
     @is_on.setter
     def is_on(self, value: bool):
         self._is_on = value
+        asyncio.create_task(self.update_hass())
 
     @property
     def power(self)-> str:
@@ -81,7 +86,8 @@ class TendaBeliPlug():
     @power.setter
     def power(self,value: str):
         self._power = value
-        self._power_last_update = time.time() 
+        self._power_last_update = time.time()
+        asyncio.create_task(self.update_hass())
 
     @property
     def energy(self)-> str:
@@ -90,6 +96,7 @@ class TendaBeliPlug():
     def energy(self,value: str):
         self._energy = value
         self._energy_last_update = time.time() 
+        asyncio.create_task(self.update_hass())
     
     
 class TendaBeliServer:
@@ -98,7 +105,6 @@ class TendaBeliServer:
         self._running = False
         self._servers = []
         self._connected_plugs = {}
-        self._op_callbacks = set()
         self._stp_callbacks = set()
                 
         self._prov_srv_ip: str = "" 
@@ -118,14 +124,10 @@ class TendaBeliServer:
                 plug: TendaBeliPlug = None
                 for key, plug in self._connected_plugs.items():
                     if not plug.alive:
-                        _LOGGER.debug(f"{plug.sn} is not more live, will be removed")
+                        await plug.update_hass()
                         pop_plugs.append(key)
-                        for callback in self._op_callbacks:
-                            await callback(f"{plug.sn}", "update")
-                        for callback in self._stp_callbacks:
-                            await callback(f"{plug.sn}", "discard")
+                        _LOGGER.debug(f"{plug.sn} is not more live, will be removed")
                     else:
-                        plug.send_power_request()
                         _LOGGER.debug(f"{plug.sn} is still active")
 
                 for key in pop_plugs:
@@ -135,11 +137,17 @@ class TendaBeliServer:
                 _LOGGER.info(f"Unexpected {err=}, {type(err)=} durig plug health check!")
             await asyncio.sleep(DEFAULT_TIMEOUT+10)
 
-    def register_operational_callback(self, callback):
-        self._op_callbacks.add(callback)
+    def register_operational_callback(self, callback, _sn):
+        plug: TendaBeliPlug = None
+        for plug in self._connected_plugs.values():
+            if plug.sn == _sn:
+                plug.op_callbacks(callback)
     
-    def remove_operational_callback(self, callback):
-        self._op_callbacks.discard(callback)
+    def remove_operational_callback(self, callback, _sn):
+        plug: TendaBeliPlug = None
+        for plug in self._connected_plugs.values():
+            if plug.sn == _sn:
+                plug.op_callbacks(callback, True)
 
     def register_setup_callback(self, callback):
         self._stp_callbacks.add(callback)
@@ -190,7 +198,6 @@ class TendaBeliServer:
         """ Parse packets from plugs """
         try:
             address, port = writer.get_extra_info('peername')
-            # register new plug
             self._connected_plugs[address] = TendaBeliPlug(address, writer)
 
             _LOGGER.info(f"Plug {address} succesfully redirected to provisioning server")
@@ -212,6 +219,7 @@ class TendaBeliServer:
                             if data[4] == 101 : #0x65
                                 writer.write(bytes.fromhex("24000300006600000000000000000000"))
                                 self._connected_plugs[address].alive = time.time()
+                                self._connected_plugs[address].send_power_request()
                                 _LOGGER.debug(f"Keepalive packet recieved, ack send.")
 
                             # on/off status packet recieved (with serial num identification)
@@ -219,30 +227,37 @@ class TendaBeliServer:
                             elif data[4] == 102 : #0x66
                                 if len(data) == 59:
                                     snIdx = data.rfind(b'serialNum')
-                                    self._connected_plugs[address].sn = (data[snIdx+12:snIdx+29].decode('utf-8'))
+                                    new_sn = (data[snIdx+12:snIdx+29].decode('utf-8'))
                                     self._connected_plugs[address].is_on = True if data[57] == 49 else False
+                                    self._connected_plugs[address].send_power_request()
                                     _LOGGER.debug(f"Got Switch Status for: {self._connected_plugs[address].sn} = {self._connected_plugs[address].is_on}")
-                                    for callback in self._op_callbacks:
-                                        await callback(f"{self._connected_plugs[address].sn}", "update")
+                                   
+                                    if self._connected_plugs[address].sn != new_sn:
+                                        self._connected_plugs[address].sn = new_sn
+                                        _LOGGER.debug(f"Plug {self._connected_plugs[address].sn} initializing") 
+                                        for callback in self._stp_callbacks:
+                                            await callback(f"{self._connected_plugs[address].sn}", "setup")
+                                    
 
-                            #response when command for switch is recieved
+                            #plug ack when command was recieved
                             #b'\x00\x06\x00\x01^\x00#\x03:\x00\x00_\x0c\x00\x00{"resp_code":0,"data":{"status":1}}'
                             # 15 + 
                             elif data[4] == 94 : #^
                                 if len(data) == 55:
-                                    self._connected_plugs[address].is_on = True if data[53] == 49 else False
+                                    #self._connected_plugs[address].is_on = True if data[53] == 49 else False
                                     _LOGGER.debug(f"Got command rensponse for: {self._connected_plugs[address].sn} = {self._connected_plugs[address].is_on}")
-                                    for callback in self._op_callbacks:
-                                        await callback(f"{self._connected_plugs[address].sn}", "update")       
 
                             # serial number packet recieved
                             # {"serialNum":"E9641010034003225","mark":"","time_zone":0,"location":"Europe/Prague"}'            
                             elif data[4] == 103 : #0x65
                                 snIdx = data.rfind(b'serialNum')
-                                self._connected_plugs[address].sn = (data[snIdx+12:snIdx+29].decode('utf-8'))
-                                _LOGGER.debug(f"Plug {self._connected_plugs[address].sn} was succesfully initialized") 
-                                for callback in self._stp_callbacks:
-                                    await callback(f"{self._connected_plugs[address].sn}", "setup")
+                                new_sn = (data[snIdx+12:snIdx+29].decode('utf-8'))
+                                
+                                if self._connected_plugs[address].sn != new_sn:
+                                    self._connected_plugs[address].sn = new_sn
+                                    _LOGGER.debug(f"Plug {self._connected_plugs[address].sn} initializing") 
+                                    for callback in self._stp_callbacks:
+                                        await callback(f"{self._connected_plugs[address].sn}", "setup")
 
                             elif data[4] ==  213: #0xd5
                                 if len(data) > 50:
@@ -250,8 +265,6 @@ class TendaBeliServer:
                                     powStr = powStr[powStr.rfind(':')+1:]
                                     self._connected_plugs[address].power = powStr
                                     _LOGGER.debug(f"Got Actual Power Draw for: {self._connected_plugs[address].sn} = {self._connected_plugs[address].power}")
-                                    for callback in self._op_callbacks:
-                                        await callback(f"{self._connected_plugs[address].sn}", "update")
                             
                             # electricity consumption packet recieved
                             #b'\x00\x06\x00\x01\x89\x007\x03E\x00\x00\x00\x00\x00\x00{"ver":3,"energy":["1688828405,200677,2.220,128987,0"]}'
@@ -274,8 +287,6 @@ class TendaBeliServer:
                                                 for i in range(0, dataCnt, 5) :
                                                     self._connected_plugs[address].energy = consumeRaw[2]
                                                     _LOGGER.debug(f"Got Overall Consumption: {address} = {consumeRaw[2]}")
-                                    for callback in self._op_callbacks:
-                                        await callback(f"{self._connected_plugs[address].sn}", "update")
                             
                             #Unknow message
                             #b'\x00\x06\x00\x01\x81\x00\x00\x03D\x00\x00_\x0c\x00\x00'

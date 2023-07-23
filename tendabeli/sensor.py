@@ -19,30 +19,30 @@ async def async_setup_platform(
     async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None):
     
-    async def remove_entity(entity_id):
+    async def remove_entity_if_exist(unique_id):
         try:
             entity_registry = async_get(hass)
-            entity_entry = entity_registry.async_get(entity_id)
-            if entity_entry:
-                await entity_registry.async_remove(entity_entry.entity_id)
+            entity_id = entity_registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+            if not entity_id == None:
+                entity_registry.async_remove(entity_id)
+                _LOGGER.debug(f"Succesfully removed {entity_id}")
         except Exception as err:
                 _LOGGER.debug(f"Unexpected error during entity removal, {err=}, {type(err)=}")
                 raise
-    
+        
     async def process_callback(sn: str, msg: str):
         try:
             if msg == "setup":
                 power = TendaBeliPower(hass.data[DOMAIN][HUB], sn)
                 energy = TendaBeliEnergy(hass.data[DOMAIN][HUB], sn)
-                await power.async_update()
-                await energy.async_update()
-                async_add_entities([power, energy])
+                await remove_entity_if_exist(f"tbp_power_{sn}")
+                await remove_entity_if_exist(f"tbp_energy_{sn}")
+                async_add_entities([power, energy], True)
                 _LOGGER.debug(f"Succesfully added sensor entities for {sn}")
 
             elif msg == "discard":
-                await remove_entity(f"tbp_energy_{sn}")
-                await remove_entity(f"tbp_power_{sn}")
-                _LOGGER.debug(f"Succesfully removed {sn}")
+                await remove_entity_if_exist(f"tbp_power_{sn}")
+                await remove_entity_if_exist(f"tbp_energy_{sn}")
 
         except Exception as err:
                 _LOGGER.debug(f"Unexpected error during setup, {err=}, {type(err)=}")
@@ -63,23 +63,21 @@ class TendaBeliSensor(SensorEntity):
         self._plug: TendaBeliPlug = self._hub.get_TBP(self._sn)
 
         self._available = False
-        self._state = 0
+        self._state = "unknown"
         self._attr_device_class = None
         self._attr_unit_of_measurement = None
         self._attr_state_class = None
 
     async def async_added_to_hass(self):
-        self._hub.register_operational_callback(self.process_callback)
+        self._hub.register_operational_callback(self.process_callback, self._sn)
 
     async def async_will_remove_from_hass(self):
-        self._hub.remove_operational_callback(self.process_callback)
+        self._hub.remove_operational_callback(self.process_callback, self._sn)
 
-    async def process_callback(self, sn, type):
-        if sn == self._sn:
-            self._plug = self._hub.get_TBP(self._sn)
-            self._available = self._plug.alive
-            await self.async_update()
-            self.async_write_ha_state()
+    async def process_callback(self):
+        self._available = self._plug.alive
+        await self.async_update()
+        self.async_write_ha_state()
     
     @abstractmethod
     async def async_update(self) -> None:

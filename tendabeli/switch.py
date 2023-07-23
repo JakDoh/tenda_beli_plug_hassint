@@ -18,25 +18,30 @@ async def async_setup_platform(
     async_add_entities: AddEntitiesCallback,
     discovery_info: DiscoveryInfoType | None = None) -> None:
 
-    async def remove_entity(entity_id):
-        entity_registry = async_get(hass)
-        entity_entry = entity_registry.async_get(entity_id)
-        if entity_entry:
-            await entity_registry.async_remove(entity_entry.entity_id)
-
+    async def remove_entity_if_exist(unique_id):
+        try:
+            entity_registry = async_get(hass)
+            entity_id = entity_registry.async_get_entity_id("switch", DOMAIN, unique_id)
+            if not entity_id == None:
+                entity_registry.async_remove(entity_id)
+                _LOGGER.debug(f"Succesfully removed {entity_id}")
+        except Exception as err:
+                _LOGGER.debug(f"Unexpected error during entity removal, {err=}, {type(err)=}")
+                raise
+    
     async def process_callback(sn: str, msg: str):
         if msg == "setup":
             try:
                 plug = TendaBeliSwitch(hass.data[DOMAIN][HUB], sn)
-                await plug.async_update()
-                async_add_entities([plug])
+                await remove_entity_if_exist(f"tbp_switch_{sn}")
+                async_add_entities([plug], True)
                 _LOGGER.debug(f"Succesfully added switch entity for {sn}")
+                
             except Exception as err:
                 _LOGGER.debug(f"Unexpected error during setup, {err=}, {type(err)=}")
                 raise
         elif msg == "discard":
-            await remove_entity(f"tbp_switch_{sn}")
-            _LOGGER.debug(f"Succesfully removed {sn}")
+            await remove_entity_if_exist(f"tbp_switch_{sn}")
     
     try:
         hub: TendaBeliServer = hass.data[DOMAIN][HUB]
@@ -57,15 +62,14 @@ class TendaBeliSwitch(SwitchEntity):
         self._plug: TendaBeliPlug = self._hub.get_TBP(self._sn)
 
     async def async_added_to_hass(self):
-        self._hub.register_operational_callback(self.process_callback)
+        self._hub.register_operational_callback(self.process_callback, self._sn)
 
     async def async_will_remove_from_hass(self):
-        self._hub.register_operational_callback(self.process_callback)
+        self._hub.register_operational_callback(self.process_callback, self._sn)
 
-    async def process_callback(self, sn, type):
-        if sn == self._sn:
-            await self.async_update()
-            self.async_write_ha_state()
+    async def process_callback(self):
+        await self.async_update()
+        self.async_write_ha_state()
     
     @property
     def name(self):
@@ -93,7 +97,7 @@ class TendaBeliSwitch(SwitchEntity):
         return self._available 
 
     async def async_update(self):
-        self._plug = self._hub.get_TBP(self._sn)
+        #self._plug = self._hub.get_TBP(self._sn)
         self._available = self._plug.alive
         self._state =  self._plug.is_on
 
