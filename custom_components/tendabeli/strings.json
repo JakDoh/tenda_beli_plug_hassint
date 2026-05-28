@@ -1,0 +1,16 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tenda Beli Hub Setup",
+        "description": "Press submit to create the hub. Smart plugs will be added automatically."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one Tenda Beli hub can be configured.",
+      "already_configured": "A Tenda Beli hub is already configured.",
+      "unknown": "Setup was aborted due to an unknown error."
+    }
+  },
+  "options": {}
+}
